@@ -194,7 +194,6 @@ namespace ActorDemo
         private int Port { get; }
         public ITimerScheduler Timers { get; set; }
         // private IActorRef Commander = null;
-        // private List<IActorRef> ServerList = new List<IActorRef>();
         private State state;
         private int votes = 0;
         private Random rnd = new Random();
@@ -244,31 +243,31 @@ namespace ActorDemo
             }
         }
 
-       
-        protected override void PostRestart(Exception reason) {
-            // TODO - NRP  - uncomment this!
-            // log.Info("Restarting Server " + Self);
+
+        // TODO - NRP - uncomment this for state saving       
+        // protected override void PostRestart(Exception reason) {
+        //     log.Info("Restarting Server " + Self);
             
-            // List<string> serializedServerList = ReadFromXmlFile<List<string>>(Self.Path.Name + "ServerList.xml");;
-            // foreach (string id in serializedServerList){
-            //     ServerList.Add(extendedSys.Provider.ResolveActorRef(id));
-            // }
+        //     List<string> serializedServerList = ReadFromXmlFile<List<string>>(Self.Path.Name + "ServerList.xml");;
+        //     foreach (string id in serializedServerList){
+        //         ServerList.Add(extendedSys.Provider.ResolveActorRef(id));
+        //     }
 
-            // state = ReadFromXmlFile<State>(Self.Path.Name + "State.xml");
-            // // state.setNumServers(ServerList.Count);
-            // state.setLogger(log);
+        //     state = ReadFromXmlFile<State>(Self.Path.Name + "State.xml");
+        //     // state.setNumServers(ServerList.Count);
+        //     state.setLogger(log);
 
-            // log.Info("term: " + state.currentTerm);
-            // state.printLog();
+        //     log.Info("term: " + state.currentTerm);
+        //     state.printLog();
 
-            // electionTimeout = rnd.Next(1, 10);
-            // log.Info("Election timeout set for " + electionTimeout + " seconds");
-            // resetTimer();
+        //     electionTimeout = rnd.Next(1, 10);
+        //     log.Info("Election timeout set for " + electionTimeout + " seconds");
+        //     resetTimer();
 
-            // // become follower
-            // log.Info("FOLLOWER");
-            // Become(Follower);
-        }
+        //     // become follower
+        //     log.Info("FOLLOWER");
+        //     Become(Follower);
+        // }
        
         protected override void PreStart() {
             foreach (ActorPath actor in ServerList) {
@@ -280,39 +279,22 @@ namespace ActorDemo
             state.setLogger(log);
         }
 
-        protected override void PostStop() {
-            log.Info("Saving off state before shutdown");
+        // TODO - NRP - uncomment for state saving
+        // protected override void PostStop() {
+        //     log.Info("Saving off state before shutdown");
 
-            WriteToXmlFile(Self.Path.Name + "State.xml", state);
+        //     WriteToXmlFile(Self.Path.Name + "State.xml", state);
 
-            // Serialization serialization = Context.System.Serialization;
-            List<string> serializedServerList = new List<string>();
-            foreach (IActorRef actor in ServerList){
-                serializedServerList.Add(Serialization.SerializedActorPath(actor));
-            }
-            WriteToXmlFile(Self.Path.Name + "ServerList.xml", serializedServerList);
-        }
+        //     // Serialization serialization = Context.System.Serialization;
+        //     List<string> serializedServerList = new List<string>();
+        //     foreach (IActorRef actor in ServerList){
+        //         serializedServerList.Add(Serialization.SerializedActorPath(actor));
+        //     }
+        //     WriteToXmlFile(Self.Path.Name + "ServerList.xml", serializedServerList);
+        // }
 
         protected override void OnReceive(object message) {
-            switch (message) {
-                // case Start dir:
-                //     log.Info("Starting Server");
-                //     ServerList = dir.serverList;
-                //     state.initializeLog();
-                //     state.setNumServers(ServerList.Count);
-                //     state.setLogger(log);
-
-                //     // Start the initial heartbeat
-                //     electionTimeout = rnd.Next(1, 10);
-                //     log.Info("Election timeout set for " + electionTimeout + " seconds");
-                //     resetTimer();
-
-                //     // become follower
-                //     log.Info("FOLLOWER");
-                //     Become(Follower);
-
-                //     break;
-                
+            switch (message) {                
                 case ClusterEvent.CurrentClusterState st:
                     foreach (var m in st.Members) {
                         log.Info($"Heard about prior member joining at {m.Address}");
@@ -341,25 +323,478 @@ namespace ActorDemo
             if (ServerList.Count == state.numServers) {           
                 log.Info("Aware of all nodes");
 
-                // // Start the initial heartbeat
-                // electionTimeout = rnd.Next(1, 10);
-                // log.Info("Election timeout set for " + electionTimeout + " seconds");
-                // resetTimer();
+                // Start the initial heartbeat
+                electionTimeout = rnd.Next(1, 10);
+                log.Info("Election timeout set for " + electionTimeout + " seconds");
+                resetTimer();
 
-                // // become follower
-                // log.Info("FOLLOWER");
-                // Become(Follower);
+                // become follower
+                log.Info("FOLLOWER");
+                Become(Follower);
             }
             
         }
 
+        protected void Follower(object message) {
+            switch (message) {
+                case AppendEntriesRPC rpc:
+                    updateLogEntries(rpc);
+                    break;
+
+                case RequestVoteRPC rpc:
+                    // log safety check
+                    if (state.lastLogTerm() > rpc.lastLogTerm ||
+                        state.lastLogTerm() == rpc.lastLogTerm && state.lastLogIndex() > rpc.lastLogIndex) {
+                        Sender.Tell(new RequestVoteRPCReply(state.currentTerm, false));
+                    }
+
+                    // perform term check
+                    else if (rpc.term < state.currentTerm) {
+                        Sender.Tell(new RequestVoteRPCReply(state.currentTerm, false));
+                    }
+
+                    else {
+                        // update term to candidate term 
+                        if (rpc.term > state.currentTerm) {
+                            state.votedFor = null;
+                            state.currentTerm = rpc.term;
+                            log.Info("Term: " + state.currentTerm);
+                        }
+
+                        // cast vote
+                        if (state.votedFor == null) {
+                            log.Info("Voting for " + Sender);
+                            state.votedFor = Sender;
+                            Sender.Tell(new RequestVoteRPCReply(state.currentTerm, true));
+                        }
+
+                        // reset timer
+                        log.Info("Voting for new candidate - reset timer");
+                        resetTimer();
+                    }
+                    break;
+
+                case Timer t:
+                    startElection();
+                    break;
+
+                default:
+                    handleMessage(message, Sender);
+                    break;
+            }
+        }
+
+        protected void Candidate(object message) {
+            switch (message) {
+
+                case Timer t:
+                    // get a new random timeout to reduce chances of infinite elections
+                    electionTimeout = rnd.Next(1, 10);
+                    log.Info("Election timeout set to " + electionTimeout);
+                    startElection();
+                    break;
+
+                case AppendEntriesRPC rpc:
+                    if (rpc.term > state.currentTerm) {
+                        // reset timer
+                        log.Info("AppendEntries from new leader - reset timer");
+                        resetTimer();
+
+                        // cancel your candidacy
+                        state.votedFor = null;
+                        votes = 0;
+
+                        // update term 
+                        state.currentTerm = rpc.term;
+                        log.Info("Term: " + state.currentTerm);
+
+                        // update log entries
+                        updateLogEntries(rpc);
+
+                        // become follower
+                        log.Info("CANDIDATE -> FOLLOWER");
+                        Become(Follower);
+                    }
+                    break;
+
+                case RequestVoteRPC rpc:
+                    respondToVoteReq(rpc);
+                    break;
+
+                case RequestVoteRPCReply reply:
+                    if (reply.term > state.currentTerm) {
+                        // cancel your candidacy
+                        state.votedFor = null;
+                        votes = 0;
+
+                        // update term 
+                        state.currentTerm = reply.term;
+                        log.Info("Term: " + state.currentTerm);
+
+                        // become follower
+                        log.Info("CANDIDATE -> FOLLOWER");
+                        Become(Follower);
+                    }
+
+                    else if (reply.term == state.currentTerm && reply.voteGranted) {
+                        votes ++;
+                        log.Info("Vote from " + Sender);
+
+                        if (votes >= (ServerList.Count / 2) + 1) {
+                            // reset next and match indexes
+                            state.resetVolatileLeaderState();
+
+                            // assume leadership
+                            log.Info("CANDIDATE -> LEADER");
+                            sendHeartBeat();
+                            Become(Leader);
+                        }
+                    }
+
+                    break;
+
+                default:
+                    handleMessage(message, Sender);
+                    break;
+            }
+        }
+
+        protected void Leader(object message) {
+            switch (message) {
+                case Timer t:
+                    // deliver heartbeat
+                    sendHeartBeat();
+                    break;
+
+                case RequestVoteRPC rpc:
+                    respondToVoteReq(rpc);
+                    break;
+
+                case AppendEntriesRPC rpc:
+                    if (Sender == Self) {
+                        break;
+                    }
+                    if(rpc.term > state.currentTerm) {
+                        // update term 
+                        state.currentTerm = rpc.term;
+                        log.Info("Term: " + state.currentTerm);
+
+                        // become follower
+                        log.Info("LEADER -> FOLLOWER");
+                        Become(Follower);
+                    }
+                    break;
+
+                case AppendEntriesRPCReply reply:
+                    int i = ServerList.IndexOf(Sender.Path);
+                    if (!reply.success) {
+                        state.nextIndex[i] --;
+                        log.Info("append for " + Sender + " failed, next_index: " + state.nextIndex[i]);
+
+                    } else {
+                        if (state.nextIndex[i] < state.log.Count) {
+                            state.nextIndex[i] ++;
+                        }
+                        if (state.matchIndex[i] < state.lastLogIndex()) {
+                            state.matchIndex[i] ++;       
+                        }                        
+                    }
+                    log.Info("next_index: " + state.nextIndex[i] + ", matchIndex: " + state.matchIndex[i] + ", commitIndex: " + state.commitIndex + ", lastApplied: " + state.lastApplied);
+
+                    if (state.lastLogIndex() >= state.nextIndex[i]) {
+                        log.Info("Sending update to " + Sender);
+                        List<LogItem> relEntries = state.log.GetRange(state.nextIndex[i] + 1, 1);
+                        tell(ServerList[i],new AppendEntriesRPC(state.currentTerm, Self, state.nextIndex[i], state.log[state.nextIndex[i]].term, relEntries, state.commitIndex));
+                        // ServerList[i].Tell(new AppendEntriesRPC(state.currentTerm, Self, state.nextIndex[i], state.log[state.nextIndex[i]].term, relEntries, state.commitIndex));
+                    }
+
+                    updateCommitIndex();
+                    updateStateMachine(true);
+
+                    break;
+
+                case ClientRequest cmd:
+                    // update log
+                    log.Info("Received command from client");
+
+                    // check to see if we have processed a similar cmd
+                    List<LogItem> appliedItems = state.log.GetRange(1, state.lastApplied);
+                    foreach(LogItem item in appliedItems) {
+                        if (item.id == cmd.id) {
+                            log.Info("Rejecting request - already applied");
+                            Sender.Tell(item.value);
+                            break;
+                        }
+                    }
+
+                    int prevLogIndex = state.lastLogIndex();
+                    int prevLogTerm; 
+
+                    // add relevant info to cmd object
+                    state.addLogItem(cmd, Serialization.SerializedActorPath(Sender), prevLogIndex);
+                    
+                    // inform serverlist of client updates
+                    for (int j=0; j< ServerList.Count; j++) {
+                        // TODO - NRP - double check this one
+                        if (ServerList[j] == Self.Path) {
+                            continue;
+                        }
+                        // not sure why it can't just be >
+                        if (prevLogIndex >= state.nextIndex[j]) {
+                            prevLogIndex = state.nextIndex[j];
+                        }
+                        prevLogTerm = state.log[prevLogIndex].term;
+
+                        // get all relevant entries
+                        // List<LogItem> relEntries = state.log.GetRange(prevLogIndex + 1, state.log.Count - (prevLogIndex + 1));
+                        
+                        // log.Info(ServerList[j] + " prevLogIndex: " + prevLogIndex);
+                        List<LogItem> relEntries = state.log.GetRange(prevLogIndex + 1, 1);
+                        // log.Info("sending " + relEntries.Count + " entities to follower");
+                        tell(ServerList[j], new AppendEntriesRPC(state.currentTerm, Self, prevLogIndex, prevLogTerm, relEntries, state.commitIndex));
+                        // ServerList[j].Tell(new AppendEntriesRPC(state.currentTerm, Self, prevLogIndex, prevLogTerm, relEntries, state.commitIndex));
+                    } 
+                    state.printLog();
+                    break;
+
+                default:
+                    handleMessage(message, Sender);
+                    break;
+            }
+        }
+        
         protected void AddPeer(IActorRef sender) {
             if (Sender == Self && !ServerList.Contains(Sender.Path)) {
                 ServerList.Add(Sender.Path);
                 log.Warning($"Added Sender {Sender.Path} to Serverlist, Count: {ServerList.Count}");
             }
         }
+
+        protected void startElection() {
+            log.Info("FOLLOWER -> CANDIDATE");
+    
+            // increment term
+            state.currentTerm += 1;
+            log.Info("Term: " + state.currentTerm);
+
+            // vote for self
+            state.votedFor = Self;
+            votes = 1;
+            log.Info("DEBUG - votes had: " + votes + ", needed: " + ((ServerList.Count / 2) + 1));
+            if (votes >= (ServerList.Count / 2) + 1) {
+                // reset next and match indexes
+                state.resetVolatileLeaderState();
+
+                // assume leadership
+                log.Info("CANDIDATE -> LEADER");
+                sendHeartBeat();
+                Become(Leader);
+                return;
+            }
+            
+            // reset timer
+            resetTimer();
+
+            // request votes from others
+            // foreach (IActorRef actor in ServerList) {
+            //     actor.Tell(new RequestVoteRPC(state.currentTerm, Self, state.log.Count - 1, state.log[state.log.Count - 1].term));
+            // } 
+            foreach (ActorPath actor in ServerList) {
+                tell(actor, new RequestVoteRPC(state.currentTerm, Self, state.log.Count - 1, state.log[state.log.Count - 1].term));
+            }
+
+            Become(Candidate);
+        }
+        protected void sendHeartBeat() {
+            // log.Info("Heartbeat");
+            // foreach (IActorRef actor in ServerList) {
+            //     actor.Tell(new AppendEntriesRPC(state.currentTerm, Self, state.log.Count - 1, state.log[state.log.Count - 1].term, new List<LogItem>(), state.commitIndex));
+            // }
+            foreach (ActorPath actor in ServerList) {
+                tell(actor, new AppendEntriesRPC(state.currentTerm, Self, state.log.Count - 1, state.log[state.log.Count - 1].term, new List<LogItem>(), state.commitIndex));
+            }
+            resetTimer();
+        }
+        protected void respondToVoteReq(RequestVoteRPC rpc) {
+            if (Sender == Self) {
+                return;
+            }
+
+            if (state.currentTerm > rpc.term) {
+                Sender.Tell(new RequestVoteRPCReply(state.currentTerm, false));
+            }
+            
+            // log safety  and term check
+            else if (state.lastLogTerm() > rpc.lastLogTerm ||
+                state.lastLogTerm() == rpc.lastLogTerm && state.lastLogIndex() > rpc.lastLogIndex) {
+                Sender.Tell(new RequestVoteRPCReply(state.currentTerm, false));
+            }
+
+            else if (state.currentTerm == rpc.term && state.votedFor != null) {
+                Sender.Tell(new RequestVoteRPCReply(state.currentTerm, false));
+            }
+
+            else {
+                // cancel your candidacy
+                state.votedFor = null;
+                votes = 0;
+
+                // update term 
+                state.currentTerm = rpc.term;
+                log.Info("Term: " + state.currentTerm);
+
+                // vote for sender
+                log.Info("Voting for " + Sender);
+                Sender.Tell(new RequestVoteRPCReply(state.currentTerm, true));
+
+                // become follower
+                log.Info("FOLLOWER");
+                Become(Follower);
+
+                // reset timer
+                // log.Info("Voting for new candidate - reset timer");
+                resetTimer();
+            }
+        }
+        protected void resetTimer() {
+            // log.Info("reset timer");
+            Timers.StartSingleTimer("election_timeout", new Timer(), TimeSpan.FromSeconds(electionTimeout));
+        }
+        protected void updateLogEntries(AppendEntriesRPC rpc) {
+            if (rpc.term < state.currentTerm || rpc.prevLogIndex > state.log.Count - 1) {
+                if (rpc.term < state.currentTerm) {log.Warning("Mismatching terms, cannot accept AppendEntries");};
+                if (rpc.prevLogIndex > state.log.Count - 1) {
+                    log.Warning("Logs are out of date, log update unsuccessful");
+                    log.Info("prevLogIndex: " + rpc.prevLogIndex + ", log.Count: " + (state.log.Count - 1));
+                };
+                rpc.leaderId.Tell(new AppendEntriesRPCReply(state.currentTerm, false));
+                return;
+            }
+
+            // delete conflicting log entry and all following entries
+            if (rpc.prevLogTerm != state.log[rpc.prevLogIndex].term) {
+                log.Warning("Logs are out of date, log update unsuccessful");
+                log.Info("Term of log entry " + rpc.prevLogTerm + " don't match");
+                rpc.leaderId.Tell(new AppendEntriesRPCReply(state.currentTerm, false));
+            }
+
+            // append any new entries not already in the log
+            else if (rpc.prevLogTerm == state.log[rpc.prevLogIndex].term) {
+                int i, j;
+                for (i=0; i < rpc.entries.Count; i++) {
+                    if (rpc.prevLogIndex + i + 1 > state.log.Count - 1) {
+                        // log.Info("all entites match existing logs");
+                        break;
+                    }
+                    if (state.log[rpc.prevLogIndex + i + 1].term != rpc.entries[i].term) {
+                        // entities don't match, delete entity and all following entities
+                        state.removeLogs(rpc.prevLogIndex + i + 1);
+                        break;
+                    }
+                }
+
+                // add in all new entries
+                for (j=i; j<rpc.entries.Count; j++) {
+                    // log.Info("adding at index " + (rpc.prevLogIndex + j + 1));
+                    state.addLogItem(rpc.entries[j]);
+                }
+                if (rpc.entries.Count > 0) {state.printLog();};
+
+                // update commit index
+                if (rpc.leaderCommitIndex > state.commitIndex) {
+                    state.commitIndex = Math.Min(rpc.leaderCommitIndex, rpc.prevLogIndex + j + 1);
+                }
+                
+                // check if state machine should be updated
+                updateStateMachine(false);
+                // log.Info("CommitIndex: " + state.commitIndex + ", LastAppliedIndex: " + state.lastApplied );
+
+                lastKnownLeader = rpc.leaderId;
+                rpc.leaderId.Tell(new AppendEntriesRPCReply(state.currentTerm, true));
+            }
+
+            // received AppendEntries from current leader - reset timer
+            resetTimer();
+        }
+        protected void updateCommitIndex() {
+            List<int> sortedMatchIndexes = new List<int>(state.matchIndex);
+		    sortedMatchIndexes.Sort((a, b) => b.CompareTo(a));
+
+            // only commit if the entry is from the current term
+            if (state.log[sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]].term == state.currentTerm) {
+                state.commitIndex = Math.Max(state.commitIndex, sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]);
+                // log.Info("Commit Index: " + state.commitIndex);
+            } else {
+                // log.Info("DEBUG - matchIndex: " + printList(state.matchIndex));
+                // log.Info("DEBUG - index: " + sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]);
+                log.Info("Cannot commit because log is from previous term " + state.log[sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]].term + " " + state.currentTerm);
+            }
+        }   
+        protected void updateStateMachine(Boolean leader) {
+            if (state.commitIndex > state.lastApplied) {
+                state.lastApplied ++;
+                LogItem logToApply = state.log[state.lastApplied];
+                switch(logToApply.command.function) {
+                    case "inc":
+                        state.stateVariable += logToApply.command.amount;
+                        break;
+                    case "dec":
+                        state.stateVariable -= logToApply.command.amount;
+                        break;
+                    case "eq":
+                        state.stateVariable = logToApply.command.amount;
+                        break;
+                    default:
+                        break;
+                }
+                log.Info("Applied log id " + logToApply.id + ", counter value: " + state.stateVariable);
+                state.log[state.lastApplied].value = state.stateVariable;
+                IActorRef sender = extendedSys.Provider.ResolveActorRef(state.log[state.lastApplied].serializedSender);
+                if (leader) {
+                    sender.Tell(state.stateVariable);
+                }
+            }
+        }
+
+        protected void handleMessage(object message, IActorRef sender) {
+            switch (message) {
+                // case Close s:
+                //     log.Info("END msg received");
+                //     Context.Stop(Self);
+                //     break;
+
+                case ClientRequest c:
+                    log.Warning("Command recieved, needs to be passed to the leader");
+                    if (lastKnownLeader != null) {
+                        sender.Tell(lastKnownLeader);
+                    }
+                    break;
+
+                case Exception ex:
+                    log.Error("Server received Kill Message");
+                    throw ex;
+
+                default:
+                    log.Warning("Default: " + message.GetType());
+                    break;
+            }
+        }
+        protected string printList(List<int> lis) {
+            string s = "[ ";
+            foreach(int item in lis) {
+                s += (item + " ");
+            }
+            s += "]";
+            return s;
+            // log.Info(s);
+        }
+
+        protected void tell (ActorPath actor, object message) {
+            Context.System.ActorSelection(actor).Tell(message);
+        }
     }
+
+    
 
     class Program
     {
