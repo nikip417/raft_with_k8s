@@ -13,16 +13,11 @@ using Petabridge.Cmd.Host;
 
 namespace ActorDemo
 {
-    public class PingPongActor : UntypedActor {
+    public class Server : UntypedActor {
         private ILoggingAdapter log = Context.GetLogger();
-        private IActorRef peer;
         private List<ActorPath> ServerList = new List<ActorPath>();
-        // private int patience;
-        private List<string> seeds;
         private int Port { get; }
-        public PingPongActor(List<string> peers, int port) {
-            // patience = 20;
-            seeds = peers;
+        public Server(List<string> peers, int port) {
             Port = port;
             foreach (string peer in peers) {
                 ServerList.Add(ActorPath.Parse($"{peer}/user/pingpong"));
@@ -30,9 +25,6 @@ namespace ActorDemo
 
         }
         protected override void PreStart() {
-            // foreach (string s in seeds) {
-            //     Context.System.ActorSelection(ActorPath.Parse($"{s}/user/pingpong")).Tell(new Identify(Self));
-            // }
             foreach (ActorPath actor in ServerList) {
                 Context.System.ActorSelection(actor).Tell(new Identify(Self));
                 Context.System.ActorSelection(actor).Tell("Oy");
@@ -43,7 +35,6 @@ namespace ActorDemo
                 case ClusterEvent.CurrentClusterState st:
                     foreach (var m in st.Members) {
                         log.Info($"Heard about prior member joining at {m.Address}");
-
                     }
                     break;
                 case ClusterEvent.MemberJoined ev:
@@ -54,14 +45,9 @@ namespace ActorDemo
                     break;
                 case Identify id:
                     log.Warning($"Received Identify from {Sender}");
-                    if (!Sender.Equals(Self)) {
-                        peer = Sender;
-                        log.Info($"Set peer to {peer}");
-                    }
                     break;
                 case IActorRef other:
                     log.Warning($"Received IActorRef from {Sender}");
-                    peer = other;
                     break;
                 case string s:
                     log.Warning($"Received {s} from {Sender}");
@@ -102,7 +88,7 @@ namespace ActorDemo
             var seeds = config.GetStringList("akka.cluster.seed-nodes");
 
             Console.WriteLine("Starting actor...");
-            IActorRef supervisor = sys.ActorOf(Props.Create<PingPongActor>(seeds, port), "pingpong");
+            IActorRef supervisor = sys.ActorOf(Props.Create<Server>(seeds, port), "pingpong");
             Cluster.Get(sys).Subscribe(supervisor, ClusterEvent.SubscriptionInitialStateMode.InitialStateAsSnapshot, typeof(ClusterEvent.MemberJoined));
 
             await sys.WhenTerminated;
