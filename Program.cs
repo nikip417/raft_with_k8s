@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using Akka.Actor;
 using Akka.Cluster;
+using Akka.Cluster.Tools.Client;
 using Akka.Configuration;
 using Akka.Serialization;
 using Akka.Event;
@@ -206,7 +207,6 @@ namespace ActorDemo
             foreach (string peer in peers) {
                 ServerList.Add(ActorPath.Parse($"{peer}/user/pingpong"));
             }
-
         }
 
         public static void WriteToXmlFile<T>(string filePath, T objectToWrite, bool append = false) where T : new()
@@ -245,53 +245,60 @@ namespace ActorDemo
 
 
         // TODO - NRP - uncomment this for state saving       
-        // protected override void PostRestart(Exception reason) {
-        //     log.Info("Restarting Server " + Self);
+        protected override void PostRestart(Exception reason) {
+            log.Info("Restarting Server " + Self);
             
-        //     List<string> serializedServerList = ReadFromXmlFile<List<string>>(Self.Path.Name + "ServerList.xml");;
-        //     foreach (string id in serializedServerList){
-        //         ServerList.Add(extendedSys.Provider.ResolveActorRef(id));
-        //     }
+            List<string> serializedServerList = ReadFromXmlFile<List<string>>(Self.Path.Name + "ServerList.xml");;
+            foreach (string id in serializedServerList){
+                // NRP - test this
+                ServerList.Add(ActorPath.Parse(id));
+                // ServerList.Add(extendedSys.Provider.ResolveActorRef(id));
+            }
 
-        //     state = ReadFromXmlFile<State>(Self.Path.Name + "State.xml");
-        //     // state.setNumServers(ServerList.Count);
-        //     state.setLogger(log);
+            state = ReadFromXmlFile<State>(Self.Path.Name + "State.xml");
+            // state.setNumServers(ServerList.Count);
+            state.setLogger(log);
 
-        //     log.Info("term: " + state.currentTerm);
-        //     state.printLog();
+            log.Info("term: " + state.currentTerm);
+            state.printLog();
 
-        //     electionTimeout = rnd.Next(1, 10);
-        //     log.Info("Election timeout set for " + electionTimeout + " seconds");
-        //     resetTimer();
+            electionTimeout = rnd.Next(1, 10);
+            log.Info("Election timeout set for " + electionTimeout + " seconds");
+            resetTimer();
 
-        //     // become follower
-        //     log.Info("FOLLOWER");
-        //     Become(Follower);
-        // }
+            // become follower
+            log.Info("FOLLOWER");
+            Become(Follower);
+        }
        
         protected override void PreStart() {
             foreach (ActorPath actor in ServerList) {
                 Context.System.ActorSelection(actor).Tell(new Identify(Self));
                 Context.System.ActorSelection(actor).Tell("Oy");
             }
+
             state.initializeLog();
             state.initIndexTracking();
             state.setLogger(log);
         }
 
         // TODO - NRP - uncomment for state saving
-        // protected override void PostStop() {
-        //     log.Info("Saving off state before shutdown");
+        protected override void PostStop() {
+            log.Info("Saving off state before shutdown");
 
-        //     WriteToXmlFile(Self.Path.Name + "State.xml", state);
+            WriteToXmlFile(Self.Path.Name + "State.xml", state);
 
-        //     // Serialization serialization = Context.System.Serialization;
-        //     List<string> serializedServerList = new List<string>();
-        //     foreach (IActorRef actor in ServerList){
-        //         serializedServerList.Add(Serialization.SerializedActorPath(actor));
-        //     }
-        //     WriteToXmlFile(Self.Path.Name + "ServerList.xml", serializedServerList);
-        // }
+            // Serialization serialization = Context.System.Serialization;
+            List<string> serializedServerList = new List<string>();
+            
+            foreach (ActorPath actor in ServerList) {
+                serializedServerList.Add(actor.ToSerializationFormat());
+            }
+            // foreach (IActorRef actor in ServerList){
+            //     serializedServerList.Add(Serialization.SerializedActorPath(actor));
+            // }
+            WriteToXmlFile(Self.Path.Name + "ServerList.xml", serializedServerList);
+        }
 
         protected override void OnReceive(object message) {
             switch (message) {                
@@ -505,7 +512,6 @@ namespace ActorDemo
                         log.Info("Sending update to " + Sender);
                         List<LogItem> relEntries = state.log.GetRange(state.nextIndex[i] + 1, 1);
                         tell(ServerList[i],new AppendEntriesRPC(state.currentTerm, Self, state.nextIndex[i], state.log[state.nextIndex[i]].term, relEntries, state.commitIndex));
-                        // ServerList[i].Tell(new AppendEntriesRPC(state.currentTerm, Self, state.nextIndex[i], state.log[state.nextIndex[i]].term, relEntries, state.commitIndex));
                     }
 
                     updateCommitIndex();
@@ -546,11 +552,7 @@ namespace ActorDemo
                         prevLogTerm = state.log[prevLogIndex].term;
 
                         // get all relevant entries
-                        // List<LogItem> relEntries = state.log.GetRange(prevLogIndex + 1, state.log.Count - (prevLogIndex + 1));
-                        
-                        // log.Info(ServerList[j] + " prevLogIndex: " + prevLogIndex);
                         List<LogItem> relEntries = state.log.GetRange(prevLogIndex + 1, 1);
-                        // log.Info("sending " + relEntries.Count + " entities to follower");
                         tell(ServerList[j], new AppendEntriesRPC(state.currentTerm, Self, prevLogIndex, prevLogTerm, relEntries, state.commitIndex));
                         // ServerList[j].Tell(new AppendEntriesRPC(state.currentTerm, Self, prevLogIndex, prevLogTerm, relEntries, state.commitIndex));
                     } 
@@ -594,11 +596,6 @@ namespace ActorDemo
             
             // reset timer
             resetTimer();
-
-            // request votes from others
-            // foreach (IActorRef actor in ServerList) {
-            //     actor.Tell(new RequestVoteRPC(state.currentTerm, Self, state.log.Count - 1, state.log[state.log.Count - 1].term));
-            // } 
             foreach (ActorPath actor in ServerList) {
                 tell(actor, new RequestVoteRPC(state.currentTerm, Self, state.log.Count - 1, state.log[state.log.Count - 1].term));
             }
@@ -606,10 +603,6 @@ namespace ActorDemo
             Become(Candidate);
         }
         protected void sendHeartBeat() {
-            // log.Info("Heartbeat");
-            // foreach (IActorRef actor in ServerList) {
-            //     actor.Tell(new AppendEntriesRPC(state.currentTerm, Self, state.log.Count - 1, state.log[state.log.Count - 1].term, new List<LogItem>(), state.commitIndex));
-            // }
             foreach (ActorPath actor in ServerList) {
                 tell(actor, new AppendEntriesRPC(state.currentTerm, Self, state.log.Count - 1, state.log[state.log.Count - 1].term, new List<LogItem>(), state.commitIndex));
             }
@@ -652,12 +645,10 @@ namespace ActorDemo
                 Become(Follower);
 
                 // reset timer
-                // log.Info("Voting for new candidate - reset timer");
                 resetTimer();
             }
         }
         protected void resetTimer() {
-            // log.Info("reset timer");
             Timers.StartSingleTimer("election_timeout", new Timer(), TimeSpan.FromSeconds(electionTimeout));
         }
         protected void updateLogEntries(AppendEntriesRPC rpc) {
@@ -683,7 +674,6 @@ namespace ActorDemo
                 int i, j;
                 for (i=0; i < rpc.entries.Count; i++) {
                     if (rpc.prevLogIndex + i + 1 > state.log.Count - 1) {
-                        // log.Info("all entites match existing logs");
                         break;
                     }
                     if (state.log[rpc.prevLogIndex + i + 1].term != rpc.entries[i].term) {
@@ -695,7 +685,6 @@ namespace ActorDemo
 
                 // add in all new entries
                 for (j=i; j<rpc.entries.Count; j++) {
-                    // log.Info("adding at index " + (rpc.prevLogIndex + j + 1));
                     state.addLogItem(rpc.entries[j]);
                 }
                 if (rpc.entries.Count > 0) {state.printLog();};
@@ -707,7 +696,6 @@ namespace ActorDemo
                 
                 // check if state machine should be updated
                 updateStateMachine(false);
-                // log.Info("CommitIndex: " + state.commitIndex + ", LastAppliedIndex: " + state.lastApplied );
 
                 lastKnownLeader = rpc.leaderId;
                 rpc.leaderId.Tell(new AppendEntriesRPCReply(state.currentTerm, true));
@@ -723,11 +711,8 @@ namespace ActorDemo
             // only commit if the entry is from the current term
             if (state.log[sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]].term == state.currentTerm) {
                 state.commitIndex = Math.Max(state.commitIndex, sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]);
-                // log.Info("Commit Index: " + state.commitIndex);
             } else {
-                // log.Info("DEBUG - matchIndex: " + printList(state.matchIndex));
-                // log.Info("DEBUG - index: " + sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]);
-                log.Info("Cannot commit because log is from previous term " + state.log[sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]].term + " " + state.currentTerm);
+                log.Debug("Cannot commit because log is from previous term " + state.log[sortedMatchIndexes[sortedMatchIndexes.Count/2 - 1]].term + " " + state.currentTerm);
             }
         }   
         protected void updateStateMachine(Boolean leader) {
@@ -758,10 +743,6 @@ namespace ActorDemo
 
         protected void handleMessage(object message, IActorRef sender) {
             switch (message) {
-                // case Close s:
-                //     log.Info("END msg received");
-                //     Context.Stop(Self);
-                //     break;
 
                 case ClientRequest c:
                     log.Warning("Command recieved, needs to be passed to the leader");
@@ -786,7 +767,6 @@ namespace ActorDemo
             }
             s += "]";
             return s;
-            // log.Info(s);
         }
 
         protected void tell (ActorPath actor, object message) {
@@ -816,16 +796,14 @@ namespace ActorDemo
             var sys = ActorSystem.Create("demo", config);
             Console.WriteLine($"joined at {selfAddress}");
 
-            //Console.WriteLine("Setting up cluster management/observability");
-            //var pbm = PetabridgeCmd.Get(sys);
-            //pbm.RegisterCommandPalette(ClusterCommands.Instance);
-            //pbm.Start();
-
             var seeds = config.GetStringList("akka.cluster.seed-nodes");
 
             Console.WriteLine("Starting actor...");
             IActorRef supervisor = sys.ActorOf(Props.Create<Server>(seeds, port), "pingpong");
             Cluster.Get(sys).Subscribe(supervisor, ClusterEvent.SubscriptionInitialStateMode.InitialStateAsSnapshot, typeof(ClusterEvent.MemberJoined));
+
+            var receptionist = ClusterClientReceptionist.Get(sys);
+            receptionist.RegisterService(supervisor);
 
             await sys.WhenTerminated;
 

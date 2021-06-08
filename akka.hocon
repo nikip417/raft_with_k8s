@@ -11,6 +11,7 @@
 #}
 
 akka {
+  akka.extensions = ["Akka.Cluster.Tools.Client.ClusterClientReceptionistExtensionProvider, Akka.Cluster.Tools"]
   coordinated-shutdown.exit-clr = on
   actor {
     provider = cluster
