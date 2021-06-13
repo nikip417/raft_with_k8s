@@ -15,7 +15,7 @@ using System.Xml.Serialization;
 using Petabridge.Cmd.Cluster;
 using Petabridge.Cmd.Host;
 
-namespace ActorDemo
+namespace hw4
 {
     public class State {
         // variable the state machine is managing
@@ -506,7 +506,7 @@ namespace ActorDemo
                             state.matchIndex[i] ++;       
                         }                        
                     }
-                    log.Info("next_index: " + state.nextIndex[i] + ", matchIndex: " + state.matchIndex[i] + ", commitIndex: " + state.commitIndex + ", lastApplied: " + state.lastApplied);
+                    log.Debug("next_index: " + state.nextIndex[i] + ", matchIndex: " + state.matchIndex[i] + ", commitIndex: " + state.commitIndex + ", lastApplied: " + state.lastApplied);
 
                     if (state.lastLogIndex() >= state.nextIndex[i]) {
                         log.Info("Sending update to " + Sender);

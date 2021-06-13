@@ -34,9 +34,9 @@ akka {
   cluster {
     #will inject this node as a self-seed node at run-time
     # Kubernetes service
-    seed-nodes = ["akka.tcp://demo@actordemo-0.actordemo.default.svc.cluster.local:4053"]
-    # seed-nodes = ["akka.tcp://demo@actordemo-0.actordemo.default.svc.cluster.local:4053", "akka.tcp://demo@actordemo-1.actordemo.default.svc.cluster.local:4053"]
+    seed-nodes = ["akka.tcp://demo@raftnode-0.raftnode.default.svc.cluster.local:4053"]
+    # seed-nodes = ["akka.tcp://demo@raftnode-0.raftnode.default.svc.cluster.local:4053", "akka.tcp://demo@raftnode-1.raftnode.default.svc.cluster.local:4053"]
     # Docker private network
-    #seed-nodes = ["akka.tcp://demo@actordemo-0:4053", "akka.tcp://demo@actordemo-1:4053"] 
+    #seed-nodes = ["akka.tcp://demo@raftnode-0:4053", "akka.tcp://demo@raftnode-1:4053"] 
   }
 }
